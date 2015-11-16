@@ -1,26 +1,35 @@
 from django.conf.urls import patterns, include, url
 from bober_tasks.views import *
-
-# Uncomment the next two lines to enable the admin:
-# from django.contrib import admin
-# admin.autodiscover()
-
+from django.views.generic import RedirectView
 from django.contrib.staticfiles.urls import staticfiles_urlpatterns
+from django.core.urlresolvers import reverse_lazy
 
 urlpatterns = patterns('',
     # Index
-    #url(r'^$', index, name="index"),
+    # url(r'^$', index, name="tasks_index"),
+    url(r'^$', RedirectView.as_view(url=reverse_lazy('tasks.list')), name="task_index"),
     # Translation
-    url(r'^new/([a-z]+)?$', new_task, name="tasks.new"),
-    url(r'^edit/(\d+)$', edit_task, name="tasks.edit"),
+    url(r'^new/$', TaskCreate.as_view(), name="tasks.new"),
+    # url(r'^edit/(\d+)/resources/(\w.+)$', tasks_resource, name="tasks.resource"),
+    # url(r'^edit/(\d+)/$', edit_task, name="tasks.edit"),
+    url(r'^tasktranslation/(?P<pk>\d+)/clone$', tasktranslation_clone, name="tasktranslation_clone"),
+    url(r'^tasktranslation/(?P<pk>\d+)/detail$', TaskTranslationDetail.as_view(), name="tasktranslation_detail"),
+    url(r'^tasktranslation/(\d+)/resources/(\w.+)$', tasks_resource, name="tasktranslation.resource"),
+    url(r'^tasktranslation/(?P<pk>\d+)/index.html$', tasktranslation_render, name="tasktranslation_render"),
+    url(r'^tasktranslation/(?P<pk>\d+)/update$', TaskTranslationUpdate.as_view(), name="tasktranslation_update"),
+    url(r'^tasktranslation/(?P<pk>\d+)/detail$', TaskTranslationDetail.as_view(), name="tasktranslation_detail"),
+    url(r'^tasktranslation/(?P<pk>\d+)/$', TaskTranslationPreview.as_view(), name="tasktranslation_preview"),
+    url(r'^tasktranslation/(?P<pk>\d+)/export$', export_to_simple_competition, name="export_to_simple_competition"),
     url(r'^translation/save.?$', tasks_save_translation, name="tasks.translation_save"),
-    url(r'^list/([a-z]+)$', tasks_list_language, name="tasks.list"),
+    url(r'^list/([a-z]*)$', tasks_list_language, name="tasks.list"),
+    url(r'^list/$', tasks_list_language, name="tasks.list"),
     url(r'^history/(\d+)$', tasks_history, name="tasks.history"),
     url(r'^new_from/(\d+)$', tasks_new_from, name="tasks.new_form"),
     url(r'^translate/(\d+)$', tasks_translate, name="tasks.translate"),
     url(r'^upload/(\d+)$', tasks_upload, name="tasks.upload"),
     url(r'^delete/(\d+)$', delete_task, name="tasks.delete"),
     url(r'^display/(\d+)/$', display_task, name="tasks.display"),
+    # url(r'^display/(\d+)/$', TaskDetail., name="tasks.display"),
     url(r'^display/(\d+)/resources/(\w.+)$', tasks_resource, name="tasks.resource"),
 
     # Task
@@ -48,7 +57,7 @@ urlpatterns = patterns('',
     url(r'^difficulty-levels/delete/(\d+)?$', delete_difficulty, name="control_panel.delete_difficulty"),
 
     # International
-    url(r'^i18n/', include('django.conf.urls.i18n'), name="i18n"),
+    # url(r'^i18n/', include('django.conf.urls.i18n'), name="i18n"),
 
     # API
     url(r'^export/task/(\d+)/([A-Za-z]+)$', export_task_language, name="api.export_task"), #vrne zadnji prevod za doloceno nalogo

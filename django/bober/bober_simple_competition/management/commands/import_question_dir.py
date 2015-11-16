@@ -28,10 +28,10 @@ class Command(BaseCommand):
                 q = Question.from_dir(os.path.join(dirname, i))
                 questions.append(q)
             except Exception, e:
-                print "Error:", e
-                pass
+                print "Error in ", i, ":", e
         print "created", slug 
         question_set, created = QuestionSet.objects.get_or_create(name = name, slug = slug)
+        question_set.questions.clear()
         print "filling questionset"
         for q in questions:
             q_dict = Question.objects.filter(id = q.id).values_list()[0]

@@ -2,7 +2,7 @@ from django.db import models
 from bober_simple_competition.models import Profile, ShortenedCode, CompetitionQuestionSet, Competition
 from code_based_auth.models import Code
 from django.utils.translation import ugettext as _
-
+from collections import OrderedDict
 # Create your models here.
 
 SCHOOL_CATEGORIES = (
@@ -13,7 +13,7 @@ SCHOOL_CATEGORIES = (
 
 class School(models.Model):
     def __unicode__(self):
-        return u"{}, {} ({})".format(self.name, self.post, self.category)
+        return u"{}, {}".format(self.name, self.post, self.category)
     name = models.CharField(unique=True, max_length=255)
     category = models.CharField(choices=SCHOOL_CATEGORIES, max_length=24)
     address = models.CharField(max_length=1024, blank=True, null=True)
@@ -44,6 +44,7 @@ class SchoolCategoryQuestionSets(models.Model):
 class SchoolCompetition(Competition):
     class Meta:
         proxy = True
+
     def questionsets_for_school_category(self, school_category):
         try:
             return SchoolCategoryQuestionSets.objects.get(
@@ -61,6 +62,7 @@ class SchoolCompetition(Competition):
                 code_data['competition_questionset'] = cqs.slug_str()
             self.school_code_create(school, teacher, access_code, 
                 competition_questionset = cqs, code_data = code_data)
+
     def school_code_create(self, school, teacher, access_code, 
             competition_questionset = None,
             code_data=None):

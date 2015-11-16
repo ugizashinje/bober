@@ -13,9 +13,10 @@ from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
 from django.core.urlresolvers import reverse
 from django.utils.text import slugify
-from django.utils.translation import ugettext as _
+from django.utils.translation import ugettext_lazy as _
 from django.utils import timezone
 from django.core.exceptions import ValidationError
+from collections import OrderedDict
 from . import graders
 import random
 import os
@@ -55,7 +56,7 @@ COMPETITOR_PRIVILEGES = (
     ('attempt', _('Participate in the competition')),
     ('attempt_before_start', _('Attempt competition before start')),
     ('results_before_end', _('See results before official end of competition')),
-    ('new_attempt', _('Start a new attempt every time this code is used')),
+    ('resume_attempt', _('Resume existing attempts')),
 )
 
 CODE_EFFECTS = (
@@ -98,6 +99,8 @@ class Competition(models.Model):
         return s
     def get_absolute_url(self):
         return reverse('competition_detail', kwargs={'slug': str(self.slug)})
+    title = CharField(max_length=256, null=True, blank=True)
+    promoted = models.BooleanField(default=False)
     slug = SlugField(unique=True)
     administrator_code_generator = ForeignKey(CodeGenerator, related_name='administrator_code_competition_set')
     competitor_code_generator = ForeignKey(CodeGenerator, related_name='competitor_code_competition_set')
@@ -106,34 +109,56 @@ class Competition(models.Model):
     # duration in seconds
     duration = IntegerField(default=60*60) # 60s * 60 = 1h.
     end = DateTimeField()
+ 
     def expand_competitor_code(self, short_code, competition_questionset):
         sep = self.competitor_code_generator.format.separator
         return competition_questionset.slug_str() + sep + short_code
+    
     def split_competitor_code(self, access_code):
         sep = self.competitor_code_generator.format.separator
         return access_code.split(sep)
-    def grade_attempts(self, grade_runtime_managers=None):
+    
+    def grade_answers(self, grader_runtime_manager=None, 
+            update_graded=False, regrade=False):
+        grader_runtime_manager = graders.init_runtimes(
+            grader_runtime_manager)
         if grader_runtime_manager is None:
             grader_runtime_manager = graders.RuntimeManager()
             grader_runtime_manager.start_runtimes()
-        for cq in self.competition_question_set_set.all():
-            for attempt in cq.attempt_set.all():
-                attempt.grade_answers(grader_runtime_manager)
+        if update_graded:
+            self.update_graded_answers(regrade = regrade, 
+                grader_runtime_manager = grader_runtime_manager)
+            if regrade:
+                return
+        for cq in CompetitionQuestionSet.objects.filter(competition=self):
+            cq.grade_answers(grader_runtime_manager=grader_runtime_manager,
+                update_graded=False, regrade=regrade)
+    
+    def update_graded_answers(self, regrade=False, grader_runtime_manager = None):
+        grader_runtime_manager = graders.init_runtimes(
+            grader_runtime_manager)
+        for cq in CompetitionQuestionSet.objects.filter(competition=self):
+            cq.update_graded_answers(regrade=regrade, 
+                grader_runtime_manager=grader_runtime_manager)
+
     def admin_privilege_choices(self, access_code):
         return filter(
             lambda x: self.administrator_code_generator.code_matches(access_code,
                 {'admin_privileges': [x[0]]}),
             ADMIN_PRIVILEGES)
+    
     def allowed_effect_choices(self, access_code):
         return filter(
             lambda x: self.administrator_code_generator.code_matches(access_code,
                 {'allowed_effects': [x[0]]}),
             CODE_EFFECTS)
+    
     def competitor_privilege_choices(self, access_code):
         return filter(
         lambda x: self.administrator_code_generator.code_matches(access_code,
             {'competitor_privileges': [x[0]]}),
         COMPETITOR_PRIVILEGES)
+    
     def max_admin_code_data(self, access_code):
         return {
             'admin_privileges': 
@@ -143,11 +168,13 @@ class Competition(models.Model):
             'competitor_privileges': 
                 [i[0] for i in self.competitor_privilege_choices(access_code)]
             }
+    
     def max_competitor_code_data(self, access_code):
         return {
             'competitor_privileges': 
                 [i[0] for i in self.competitor_privilege_choices(access_code)]
             }
+    
     def competitor_code_create(self, access_code, 
             competition_questionset = None,
             code_data = None):
@@ -172,18 +199,106 @@ class Competition(models.Model):
         c = self.administrator_code_generator.create_code(code_data)
         c.save()
         return c 
+
+ANSWER_BATCH_SIZE = 100000
+
+def _create_graded(answer, regrade, grader_runtime_manager):
+    try:
+        a = answer
+        if regrade:
+            print a
+            g_a = GradedAnswer(
+                attempt_id = a.attempt_id, question_id=a.question_id,
+                answer = a 
+            )
+            q = Question.objects.get(id=g_a.question_id)
+            grader = grader_runtime_manager.get_grader(
+                q.verification_function, q.verification_function_type)
+            g_a.score = grader(a.value, a.attempt.random_seed, q)
+            return g_a
+        else:
+            g_a, created = GradedAnswer.objects.get_or_create(
+                attempt_id=a.attempt_id, question_id=a.question_id,
+                defaults={'answer': a, 'score': None})
+            if not created and g_a.answer != a:
+                g_a.answer = a
+                g_a.score = None
+                g_a.save()
+    except Exception, e:
+        print e
+    return None
+
 class CompetitionQuestionSet(models.Model):
     def __unicode__(self):
-        return u"{}: {} ({})".format(self.id, self.name, self.questionset.slug)
-    def slug_str(self):
-        return unicode(self.id) + '.' + self.questionset.slug
-    @classmethod
-    def get_by_slug(cls, slug):
-        return cls.objects.get(id=slug[:slug.find('.')])
+        return u"{}".format(self.name)
+
     name = models.CharField(max_length=256, null=True, blank=True)
     questionset = models.ForeignKey('QuestionSet')
     competition = models.ForeignKey('Competition')
     guest_code = ForeignKey(Code, null=True, blank=True)
+ 
+    def slug_str(self):
+        return unicode(self.id) + '.' + self.questionset.slug
+    
+    @classmethod
+    def get_by_slug(cls, slug):
+        return cls.objects.get(id=slug[:slug.find('.')])
+    
+    def grade_answers(self, grader_runtime_manager=None,
+            update_graded=False, regrade=False):
+        grader_runtime_manager = graders.init_runtimes(
+            grader_runtime_manager)
+        #for i in self.attempt_set.all():
+        #    i.grade_answers(grader_runtime_manager = grader_runtime_manager,
+        #        update_graded = update_graded, regrade=regrade)
+        #return
+        #the implementation below should be faster.
+        if update_graded:
+            self.update_graded_answers(regrade=regrade, 
+                grader_runtime_manager=grader_runtime_manager)
+            if regrade:
+                return
+        graded_answers = GradedAnswer.objects.filter(attempt__competitionquestionset=self).distinct()
+        if not regrade:
+            graded_answers = graded_answers.filter(score=None)
+        graded_answers.select_related('question__verification_function',
+            'question__verification_function_type',
+            'answer__value', 'attempt')
+        for g_a in graded_answers:
+            # print "regrading", g_a.id, g_a.answer.id, g_a.answer
+            q = g_a.question
+            grader = grader_runtime_manager.get_grader(
+                q.verification_function, q.verification_function_type)
+            g_a.score = grader(g_a.answer.value, g_a.attempt.random_seed, q)
+            g_a.save()
+
+    def update_graded_answers(self, check_timestamp = False, 
+            regrade=False, grader_runtime_manager=None):
+        grader_runtime_manager = graders.init_runtimes(
+            grader_runtime_manager)
+        answers = Answer.objects.filter(
+            attempt__competitionquestionset=self).order_by('-id')
+            # attempt__competitionquestionset=self).order_by('-timestamp', '-id')
+        if check_timestamp:
+            answers.select_related('attempt__finish')
+        if regrade:
+            answers.select_related('attempt__random_seed')
+            GradedAnswer.objects.filter(
+                attempt__competitionquestionset=self).delete()
+        graded_list = []
+        grades_set = set()
+        for a in answers:
+            if (not check_timestamp or a.timestamp < a.attempt.finish) and (
+                    (a.attempt_id, a.randomized_question_id) not in grades_set):
+                g_a = _create_graded(a, regrade, grader_runtime_manager)
+                if g_a:
+                    graded_list.append(g_a)
+                grades_set.add((a.attempt_id, a.randomized_question_id))
+            if len(graded_list) > ANSWER_BATCH_SIZE:
+                GradedAnswer.objects.bulk_create(graded_list)
+                graded_list = []
+                grades_set.clear()
+        GradedAnswer.objects.bulk_create(graded_list)
 
 class CodeEffect(models.Model):
     code = ForeignKey(Code)
@@ -230,6 +345,7 @@ class QuestionSet(models.Model):
     name = CharField(max_length = 255)
     questions = ManyToManyField('Question')
     resource_caches = ManyToManyField('ResourceCache', null=True, blank=True)
+
     def question_mapping(self, random_seed):
         q = self.questions.order_by('identifier').values_list('identifier')
         d = dict()
@@ -238,10 +354,13 @@ class QuestionSet(models.Model):
         for n, i in enumerate(q):
             d[i[0]] = c[n]
         return d
+
     def cache_dir(self):
         return str(self.id) + "-" + self.slug
+
     def reverse_question_mapping(self, random_seed):
         return {v: k for k, v in self.question_mapping(random_seed).iteritems()}
+
     def rebuild_caches(self, embed_images = True):
         html_resources = {}
         self.resource_caches.all().delete()
@@ -327,6 +446,24 @@ class Resource(models.Model):
     def as_base64(self):
         return base64.b64encode(self.as_bytes())
 
+def _resource_list(soup):
+    resource_set = set()
+    imgs = soup.find_all('img')
+    objs = soup.find_all('object')
+    scripts = soup.find_all('script')
+    for items, item_type, url_property in [
+        (imgs, 'image', 'src'), 
+        (objs, 'image', 'data'), 
+        (scripts, 'javascript', 'src')]:
+        for i in items:
+            url = i.get(url_property, None)
+            if url is not None:
+                resource_set.add((item_type, url))
+    return [
+        {'type': item_type, 'url': url} for item_type, url in resource_set
+    ]
+
+
 def _question_from_dirlike(cls, identifier = '-1',
         language = None,
         regenerate_modules = True, 
@@ -342,6 +479,7 @@ def _question_from_dirlike(cls, identifier = '-1',
     except Exception, e:
         manifest = {'id': identifier, 
             'language': language}
+        print " no manifest? ", e
         regenerate_manifest = True
     try:
         my_close(f)
@@ -406,21 +544,7 @@ def _question_from_dirlike(cls, identifier = '-1',
     if len(accepted_answers) > 0:
         index_dict['acceptedAnswers'] = accepted_answers
     # find all bitmaps and .svgs
-    resource_set = set()
-    imgs = index_soup.find_all('img')
-    objs = index_soup.find_all('object')
-    scripts = index_soup.find_all('script')
-    for items, item_type, url_property in [
-        (imgs, 'image', 'src'), 
-        (objs, 'image', 'data'), 
-        (scripts, 'javascript', 'src')]:
-        for i in items:
-            url = i.get(url_property, None)
-            if url is not None:
-                resource_set.add((item_type, url))
-    resource_list = [
-        {'type': item_type, 'url': url} for item_type, url in resource_set
-    ]
+    resource_list = _resource_list(index_soup)
     index_dict['task'] = [
         {'type': "html", "url": "index.html"}] + resource_list
     if regenerate_manifest:
@@ -449,7 +573,7 @@ def _question_from_dirlike(cls, identifier = '-1',
         question.title = manifest['title']
         question.version = manifest['version']
         question.authors = manifest['authors']
-        question.accepted_answers = ",".join(manifest['acceptedAnswers'])
+        question.verification_function = ",".join(manifest['acceptedAnswers'])
         question.save()
     resource_list = manifest['task']
     modules_list = []
@@ -491,6 +615,7 @@ class Question(models.Model):
     none_score = FloatField(default=0)
     max_score = FloatField(default=1)
     # accepted_answers = CommaSeparatedIntegerField(max_length = 255, blank=True, null=True)
+
     def index(self):
         for u in ['index.html', 'index.htm']:
             try:
@@ -498,6 +623,7 @@ class Question(models.Model):
             except:
                 pass
         return None
+
     def solution(self):
         for u in ['solution.html']:
             try:
@@ -505,8 +631,10 @@ class Question(models.Model):
             except:
                 pass
         return None
+
     def index_str(self, embed_resources = True):
         raw_index = self.index().as_bytes()
+
     def manifest(self, safe=True):
         manifest = dict()
         manifest['id'] = self.identifier
@@ -531,6 +659,7 @@ class Question(models.Model):
             manifest['acceptedAnswers'] = [int(i) for i in 
                 self.accepted_answers.split(',')]
         return manifest
+
     @classmethod
     def from_zip(cls, f, identifier = '-1',
             language = None,
@@ -563,86 +692,180 @@ class Answer(models.Model):
             
     attempt = ForeignKey('Attempt')
     randomized_question_id = IntegerField()
-    timestamp = DateTimeField(auto_now = True)
+    timestamp = DateTimeField(auto_now_add = True)
     value = TextField(blank=True, null = True)
     score = FloatField(null=True)
+
     @property
     def question(self):
-        return Question.objects.get(identifier=self.question_id)
+        return Question.objects.get(identifier=self.question_identifier)
+
     @property
     def question_id(self):
+        return Question.objects.filter(
+                identifier=self.question_identifier
+            ).values_list('id', flat=True)[0]
+
+    @property
+    def question_identifier(self):
         return self.attempt.reverse_question_id(
             self.randomized_question_id)
+
 
 class AttemptInvalidation(models.Model):
     by = ForeignKey('Profile')
     reason = TextField(blank=True)
 
+class AttemptConfirmation(models.Model):
+    def __unicode__(self):
+        return u"{}: {}".format(by, attempt)
+    by = ForeignKey('Profile')
+    attempt = ForeignKey('Attempt')
+
+class Competitor(models.Model):
+    def __unicode__(self):
+        return u"{} {} ({})".format(self.first_name, self.last_name,
+            self.profile or '?')
+    profile = ForeignKey('Profile', null=True, blank=True)
+    first_name = models.CharField(max_length=128, verbose_name=_("First Name"))
+    last_name = models.CharField(max_length=128, verbose_name=_("Last Name"))
+
+class GradedAnswer(models.Model):
+    attempt = ForeignKey('Attempt')
+    question = ForeignKey('Question')
+    answer = ForeignKey('Answer')
+    score = FloatField(null=True)
+ 
 class Attempt(models.Model):
     def __unicode__(self):
-        return "{}: {} - {}: {} ({} - {})".format(self.user,
+        return u"{}: {} - {}: {} ({} - {})".format(self.competitor,
             self.competition.slug,
             self.questionset.name,
             self.access_code,
             self.start, self.finish)
+
     access_code = CodeField()
     competitionquestionset = ForeignKey('CompetitionQuestionSet')
-    user = ForeignKey('Profile', null=True, blank=True)
+    # user = ForeignKey('Profile', null=True, blank=True)
+    competitor = ForeignKey('Competitor', null=True, blank=True)
     invalidated_by = ForeignKey('AttemptInvalidation', null=True, blank=True)
+    confirmed_by = ManyToManyField('Profile', through='AttemptConfirmation',
+        null=True, blank=True)
     random_seed = IntegerField()
     start = DateTimeField(auto_now_add = True)
     finish = DateTimeField(null=True, blank=True)
+    score = FloatField(null=True, blank=True)
+    #graded_answers = ManyToManyField('Answer', through='GradedAnswer',
+    #    related_name = 'graded_attempt',
+    #    null=True, blank=True)
+ 
     @property
     def competition(self):
         return self.competitionquestionset.competition
+    
     @property
     def questionset(self):
         return self.competitionquestionset.questionset
+    
     @property
     def valid(self):
         return self.invalidated_by == None
+    
     def reverse_question_mapping(self):
         return self.questionset.reverse_question_mapping(self.random_seed)
+    
     def reverse_question_id(self, randomized_question_id):
         return self.reverse_question_mapping()[randomized_question_id]
+    
     def question_mapping(self):
         return self.questionset.question_mapping(self.random_seed)
-    def grade_answers(self, grader_runtime_manager=None, regrade=False):
-        if grader_runtime_manager is None:
-            grader_runtime_manager = graders.RuntimeManager()
-            grader_runtime_manager.start_runtimes()
-        if regrade:
-            answers = self.answer_set.select_related('question').all()
-        else:
-            answers = self.answer_set.select_related('question').filter(score=None)
-        for a in answers:
-            print "regrading", a
-            q = a.question
-            grader = grader_runtime_manager.get_grader(q.verification_function, q.verification_function_type)
-            a.score = grader(a.value, self.random_seed, q)
-            a.save()
-    def latest_answers(self):
-        # get only the latest answers
+    
+    def grade_answers(self, grader_runtime_manager=None,
+            update_graded=False, regrade=False):
+        # print "grading...", self
+        grader_runtime_manager = graders.init_runtimes(
+            grader_runtime_manager)
+        if update_graded:
+            self.update_graded_answers(
+                grader_runtime_manager=grader_runtime_manager,
+                regrade = regrade)
+            if regrade:
+                return
+        graded_answers = self.gradedanswer_set.all()
+        if not regrade:
+            graded_answers = graded_answers.filter(score=None)
+        graded_answers.select_related('question', 'answer__value')
+        for g_a in graded_answers:
+            # print "    regrading", g_a.answer
+            q = g_a.question
+            grader = grader_runtime_manager.get_grader(
+                q.verification_function, q.verification_function_type)
+            g_a.score = grader(g_a.answer.value, self.random_seed, q)
+            g_a.save()
+            # a.answer.score = a.score
+            # a.answer.save()
+
+    def update_graded_answers(self, check_timestamp=False,
+            grader_runtime_manager=None,
+            regrade=False):
         answered_questions = set()
-        answers = []
+        graded_list = []
+        if regrade:
+            GradedAnswer.objects.filter(attempt=self).delete()
+        # answers = self.answer_set.order_by("-timestamp", "-id")
+        answers = self.answer_set.order_by("-id")
+        if check_timestamp:
+            answers = answers.filter(timestamp__lte=self.finish)
         n_questions = self.questionset.questions.count()
         n_found = 0
-        for a in self.answer_set.order_by("-timestamp"):
+        for a in answers.all():
+            # print "a:", a
             if a.randomized_question_id not in answered_questions:
-                answers.append(a)
+                g_a = _create_graded(a, regrade, grader_runtime_manager)
                 answered_questions.add(a.randomized_question_id)
+                if g_a:
+                    graded_list.append(g_a)
                 n_found += 1
                 if n_found >= n_questions:
-                    return answers
-        return answers
+                    break
+        GradedAnswer.objects.bulk_create(graded_list)
 
-        
+    def latest_answers(self):
+        # get only the latest answers
+        return self.gradedanswer_set.all()
+
+    def graded_answers_by_question_id(self):
+        # return self.graded_answers.order_by('gradedanswer__question_id')
+        answered_questions = OrderedDict()
+        # print "loading."
+        for q_id in self.questionset.questions.all().order_by('id').values_list(
+                'id', flat=True):
+            answered_questions[q_id] = self.gradedanswer_set.filter(
+                question_id = q_id).first()
+        return answered_questions
+        #n_questions = len(answered_questions)
+        #n_found = 0
+        # print "  iterating.."
+        #for a in self.answer_set.order_by("-timestamp"):
+        #    q_id = a.question_id
+        #    if answered_questions[q_id] is None:
+        #        answered_questions[q_id] = a
+        #        n_found += 1
+        #        if n_found >= n_questions:
+        #            # print "  ", answered_questions
+        #            return answered_questions
+        # print "  ", answered_questions
+        #return answered_questions
+    
+    def latest_answers_sum(self):
+        return int(sum([a.score for a in self.gradedanswer_set.all() if a.score is not None]))
+
 
 class Profile(models.Model):
     def __unicode__(self):
         return unicode(self.user)
     def get_absolute_url(self):
-        return reverse('competition_detail', kwargs={'pk': str(self.pk)})
+        return reverse('profile_detail', kwargs={'pk': str(self.pk)})
     user = models.OneToOneField(User)
     feature_level = IntegerField(choices=FEATURE_LEVELS, default=1)
     managed_profiles = models.ManyToManyField('Profile', related_name='managers', null=True, blank=True)
@@ -656,6 +879,8 @@ class Profile(models.Model):
     used_codes = ManyToManyField(Code, null=True, blank=True,
         related_name='user_set')
     question_sets = ManyToManyField(QuestionSet, null=True, blank=True)
+    created_question_sets = ManyToManyField(QuestionSet, null=True, blank=True, 
+        related_name='creator_set')
     questions = ManyToManyField(Question, null=True, blank=True)
     merged_with = ForeignKey('Profile', null = True, blank=True, related_name='former_profile_set')
     # merged_with = ForeignKey(User, null = True, blank=True, related_name='merged_set')

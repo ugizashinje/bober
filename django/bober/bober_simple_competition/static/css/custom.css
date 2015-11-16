@@ -1,3 +1,41 @@
+#competition_registration input,
+#competition_registration select {
+   margin: 5px 0 5px 10px;
+}
+
+#competition_registration table + input {
+   margin-left: 170px;
+   margin-top: 20px;
+   min-width: 150px;
+   background: green;
+   font-weight: bold;
+   font-size: 18px;
+   color: white;
+   padding-top: 0;
+   padding-bottom: 0;
+}
+
+#competition_registration th {
+    text-align: right;
+    min-width: 140px;
+}
+
+.promoted a {
+    font-size: 150%;
+}
+
+.footnote {
+    font-size: 40%;
+}
+
+div.competitions-list ul {
+        list-style-type: none;
+}
+    
+li.promoted {
+        margin-bottom: 30px;
+}
+
 div.page-header {
 	height: 60px;
 	margin-top: 10px;
@@ -9,21 +47,26 @@ div#logo {
 	position: relative;
 }
 
-div#profile {
+#context_menu > div{
+	display: inline;
+}
+
+div#context_menu {
 	position: absolute;
 	right: 20px;
 	top: 80px;
 }
 
 div#content {
-	border: solid 6px darkgreen;
-	border-radius: 5px;
+	border: solid 2px #93E493;
+	border-radius: 6px;
 	padding: 50px 10px 10px 10px;
+	background: #F8F8F8;
 }
 
 body {
 	font-size: 18px;
-	background: #eee;
+	background: #f9f0df;
 }
 
 div#content div.section {
@@ -49,6 +92,115 @@ div.page-footer {
 	width: 100%;
 	text-align: right;
 	margin-top: 20px;
+}
+
+
+div.results-group,
+div.prelim,
+div.results-school {
+    font-weight: bold;
+    margin-top: 20px;
+}
+table.results {
+    margin-left: auto;
+    margin-right: auto;
+}
+
+table.junior {
+    margin-top: 10px;
+    margin-left: 40px !important;
+}
+
+table.results th, table.results tr:first-of-type th {
+    font-size: 80%;
+    text-align: right !important;
+    padding-right: 10px !important;
+}
+
+table.results tr.unconfirmed th {
+    color: #aaa;
+}
+
+table.results span.qualify-button {
+    display: inline-block;
+    width: 12px;
+    height: 14px;
+    margin-left: 5px;
+}
+
+table.results tr.unconfirmed span.qualify-button {
+    background: url(/static/img/qualify.png) 0px 0px/12px 12px no-repeat;
+    margin-left: 29px; /* include the hidden pencil */
+}
+
+table.results tr.confirmed span.qualify-button {
+    background: url(/static/img/disqualify.png) 0px 0px/12px 12px no-repeat;
+}
+
+table.results tr.unconfirmed td span {
+    display: none;
+}
+
+table.results tr:nth-child(even) {
+    background: white;
+}
+
+table.results tr {
+    line-height: 150%
+}
+
+table.results td, table.results th {
+    font-weight: normal;
+}
+
+table#results tr:first-of-type th {
+    font-weight: bold;
+}
+
+table.results tr:first-of-type th,
+table.results td {
+    text-align: center;
+    padding-left: 3px;
+    padding-right: 3px;
+    font-size: 80%;
+}
+
+table.results input {
+    width: 90px;
+    height: 20px;
+    line-height: 20px;
+}
+
+span.correct {
+    color: green;
+}
+
+span.wrong {
+    color: red;
+}
+
+table.results tr.confirmed td.score, 
+table.results tr.unconfirmed td.score {
+    text-align: right;
+    width: 27px;
+}
+
+table.results tr.unconfirmed th img.pencil {
+    display: none;
+}
+
+table.results th img {
+    padding-left: 5px;
+}
+
+table.results td.score {
+    width: 30px;
+    padding: 0;
+}
+
+td.score span {
+    font-weight: bold;
+    padding-left: 10px;
 }
 
 /*********/

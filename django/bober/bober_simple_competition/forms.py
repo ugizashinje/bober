@@ -3,12 +3,13 @@ from collections import OrderedDict
 from django.forms.models import inlineformset_factory, model_to_dict, fields_for_model
 # from django.forms.models import model_to_dict, fields_for_model
 from bober_simple_competition.models import *
-from django.utils.translation import ugettext as _
+from django.utils.translation import ugettext_lazy as _
 from extra_views import InlineFormSet
 import code_based_auth.models
 import django.forms.extras.widgets as django_widgets
 import autocomplete_light
 from django.forms import ModelForm, TextInput
+from django.core.validators import validate_email
 
 class ProfileForm(forms.ModelForm):
     class Meta:
@@ -24,18 +25,22 @@ class AccessCodeForm(forms.Form):
             label=_('Execute effects later'), required = False,
             initial = False)
 
+class MinimalAccessCodeForm(forms.Form):
+    access_code = forms.CharField(label=_('Access code'), max_length=256)
+
 class BasicProfileForm(forms.ModelForm):
     class Meta:
         model = Profile
         """exclude = ('user', 'created_codes', 'received_codes',
             'vcard', 'question_sets', 'managed_profiles', 'used_codes',
             'update_used_codes_timestamp', 'update_managers_timestamp')"""
-        fields = ('merged_with',);
+        # fields = ('merged_with',);
+        fields = ()
         widgets = {
-            # the autocomplete: off is supposed to preven firefox from filling in the form
+            # the autocomplete: off is supposed to prevent firefox from filling in the form
             # with the current username
-            'merged_with': autocomplete_light.ChoiceWidget('ManagedUsersAutocomplete', 
-                attrs={'class':'modern-style', 'autocomplete': 'off'}),
+        #    'merged_with': autocomplete_light.ChoiceWidget('ManagedUsersAutocomplete', 
+        #        attrs={'class':'modern-style', 'autocomplete': 'off'}),
         #    'merged_with': django_widgets.Select()
         }
     password = forms.CharField(required=False, 
@@ -88,60 +93,163 @@ class BasicProfileForm(forms.ModelForm):
 class ProfileEditForm(BasicProfileForm):
     pass
 
-class CodeRegistrationForm(BasicProfileForm):
+
+class QuestionSetRegistrationForm(forms.ModelForm):
     class Meta:
-        model = Profile
-        """exclude = ('user', 'created_codes', 'received_codes',
-            'vcard', 'question_sets', 'managed_profiles', 'used_codes',
-            'update_used_codes_timestamp', 'update_managers_timestamp')"""
-        fields = []
-        widgets = {
-            # the autocomplete: off is supposed to preven firefox from filling in the form
-            # with the current username
-            'merged_with': autocomplete_light.ChoiceWidget('ManagedUsersAutocomplete', 
-                attrs={'class':'modern-style', 'autocomplete': 'off'}),
-        #    'merged_with': django_widgets.Select()
-        }
-    access_code = forms.CharField(label=_('Access code'), max_length=256)
-    register_as = forms.ChoiceField(choices=USER_ROLES)
-    competition = forms.ModelChoiceField(Competition.objects.all())
-    def save(self, *args, **kwargs):
-        profile = super(CodeRegistrationForm, self).save(*args,**kwargs)
-        competition = self.cleaned_data['competition']
-        if self.cleaned_data['register_as'] == 'admin':
-            codegen = competition.administrator_code_generator
-        elif self.cleaned_data['register_as'] == 'competitor':
-            codegen = competition.competitor_code_generator
-        try:
-            # comment out the following 2 lines to improve performance; 
-            # the managers can be update later
-            code = codegen.codes.get(value = self.cleaned_data["access_code"])
-            self.update_managers(codes = [code])
-        except Exception, e:
-            print e
-            pass
-        return profile
-    
+        model = User
+        fields = ['first_name', 'last_name']
+    username = forms.CharField(required=False, widget=forms.HiddenInput())
+    access_code = forms.CharField(label=_('Access code'))
+    def __init__(self, *args, **kwargs):
+        cqs = kwargs.pop('competitionquestionset')
+        self.questionset_slug = cqs.slug_str()
+        self.codegen = cqs.competition.competitor_code_generator
+        retval = super(QuestionSetRegistrationForm, self).__init__(*args, **kwargs)
+        self._meta.fields += ['username', 'email']
+        return retval
     def clean(self):
-        cleaned_data = super(CodeRegistrationForm, self).clean()
-        if cleaned_data['register_as'] == 'admin':
-            codegen = cleaned_data['competition'].administrator_code_generator
-        elif cleaned_data['register_as'] == 'competitor':
-            codegen = cleaned_data['competition'].competitor_code_generator
-        else:
-            raise forms.ValidationError(_("Wrong user role"))
-        if not codegen.code_matches(cleaned_data['access_code'], 
-            {'competitor_privileges': ['attempt']}):
-            raise forms.ValidationError(_("Invalid access code"))
+        if len(self.cleaned_data.get('username', '')) < 1:
+            self.cleaned_data['username'] = '.'.join([
+                slugify(self.cleaned_data.get('first_name', u'')),
+                slugify(self.cleaned_data.get('last_name', u'')),
+                slugify(self.cleaned_data.get('access_code', u''))])[:30]
+        if len(self.cleaned_data.get('email', '')) < 1:
+            self.cleaned_data['email'] = self.cleaned_data['username'] + '@bober.acm.si'
+        cleaned_data = super(QuestionSetRegistrationForm, self).clean()
+        if cleaned_data is None:
+            cleaned_data = self.cleaned_data
+        if not self.cleaned_data.get('password', None):
+            self.cleaned_data['password'] = self.cleaned_data.get('access_code', '')
         return cleaned_data
+    def clean_access_code(self):
+        full_code = self.questionset_slug + self.codegen.format.separator + self.cleaned_data['access_code']
+        if not self.codegen.code_matches(full_code, 
+            {'competitor_privileges':['attempt']}):
+            raise ValidationError(_('Wrong access code'), code='access_code')
+        self.cleaned_data['full_code'] = full_code
+        return self.cleaned_data['access_code']
+    #def clean_username(self):
+    #    validate_email(self.cleaned_data['username'])
+    #    return self.cleaned_data['username']
+    def save(self, *args, **kwargs):
+        instance = super(QuestionSetRegistrationForm, self).save(*args,**kwargs)
+        password = self.cleaned_data.get('password', '')
+        if len(password) > 0:
+            instance.set_password(password)
+            instance.save()
+        instance.profile.managed_profiles.add(instance.profile)
+        return instance
 
-class CompetitionRegistrationForm(CodeRegistrationForm):
-    register_as = forms.ChoiceField(choices=USER_ROLES)
-    competition = forms.ModelChoiceField(Competition.objects.all(), widget=forms.HiddenInput)
+class CompetitionRegistrationForm(QuestionSetRegistrationForm):
+    def __init__(self, *args, **kwargs):
+        self.competition = kwargs.pop('competition')
+        self.codegen = self.competition.competitor_code_generator
+        retval = super(QuestionSetRegistrationForm, self).__init__(*args, **kwargs)
+        self.fields['competition_questionset'] = forms.ModelChoiceField(label=_("Group"), queryset = self.competition.competitionquestionset_set.all(), required=True)
+        self._meta.fields += ['username', 'email']
+        return retval
+    def clean_access_code(self):
+        return self.cleaned_data['access_code']
+    def clean_competition_questionset(self):
+        return self.cleaned_data['competition_questionset']
+    def clean(self):
+        cqs = self.cleaned_data.get('competition_questionset', None)
+        if cqs is not None:
+            questionset_slug = self.cleaned_data['competition_questionset'].slug_str()
+            full_code = questionset_slug + self.codegen.format.separator + self.cleaned_data['access_code']
+            if not self.codegen.code_matches(full_code, 
+                    {'competitor_privileges':['attempt']}):
+                self.errors['access_code']=[_('Wrong access code')]
+            self.cleaned_data['full_code'] = full_code
+        else:
+            self.errors['competition_questionset']=[_('This field is required')]
+        return super(CompetitionRegistrationForm, self).clean()
 
-class ImmediateCompetitionForm(CompetitionRegistrationForm):
-    competition_questionset_field = forms.ModelChoiceField(
-        queryset = CompetitionQuestionSet.objects.all())
+class QuestionSetCompetitorForm(forms.ModelForm):
+    class Meta:
+        model = Competitor
+        fields = ['first_name', 'last_name']
+    # profile = forms.ModelChoiceField(required=False, queryset=Profile.objects.all(), widget=forms.HiddenInput())
+    short_access_code = forms.CharField(label=_('Access code'))
+    def __init__(self, *args, **kwargs):
+        cqs = kwargs.pop('competitionquestionset')
+        self.profile = kwargs.pop('profile', False)
+        self.questionset_slug = cqs.slug_str()
+        self.codegen = cqs.competition.competitor_code_generator
+        retval = super(QuestionSetCompetitorForm, self).__init__(*args, **kwargs)
+        self._meta.fields += ['profile']
+        return retval
+    def clean(self):
+        cleaned_data = super(QuestionSetCompetitorForm, self).clean()
+        if cleaned_data is None:
+            cleaned_data = self.cleaned_data
+        cleaned_data['profile'] = self.profile or None
+        self.cleaned_data = cleaned_data
+        return cleaned_data
+    def clean_short_access_code(self):
+        full_code = self.questionset_slug + self.codegen.format.separator + self.cleaned_data['short_access_code']
+        if not self.codegen.code_matches(full_code, 
+            {'competitor_privileges':['attempt']}):
+            raise ValidationError(_('Wrong access code'), code='short_access_code')
+        if self.codegen.code_matches(full_code,
+            {'competitor_privileges':['resume_attempt']}):
+            if not self.profile:
+                self.profile = None
+        self.cleaned_data['full_code'] = full_code
+        return self.cleaned_data['short_access_code']
+    #def clean_username(self):
+    #    validate_email(self.cleaned_data['username'])
+    #    return self.cleaned_data['username']
+    def save(self, *args, **kwargs):
+        try:
+            assert self.profile is not False
+            cleaned = self.cleaned_data
+            self.instance = Competitor.objects.filter(profile = cleaned['profile'],
+                first_name = cleaned['first_name'],
+                last_name = cleaned['last_name'])[0]
+        except:
+            pass
+        #print self.instance.id, self.instance
+        instance = super(QuestionSetCompetitorForm, self).save(*args,**kwargs)
+        #print instance.id, self.instance
+        return instance
+
+class CompetitionCompetitorForm(QuestionSetCompetitorForm):
+    def __init__(self, *args, **kwargs):
+        self.competition = kwargs.pop('competition')
+        self.profile = kwargs.pop('profile', False)
+        self.codegen = self.competition.competitor_code_generator
+        retval = super(QuestionSetCompetitorForm, self).__init__(*args, **kwargs)
+        self.fields['competition_questionset'] = forms.ModelChoiceField(label=_("Group"), queryset = self.competition.competitionquestionset_set.all(), required=True)
+        self._meta.fields += ['profile']
+        return retval
+    def clean_short_access_code(self):
+        return self.cleaned_data['short_access_code']
+    def clean_competition_questionset(self):
+        return self.cleaned_data['competition_questionset']
+    def clean(self):
+        cqs = self.cleaned_data.get('competition_questionset', None)
+        if cqs is not None:
+            questionset_slug = self.cleaned_data['competition_questionset'].slug_str()
+            full_code = questionset_slug + self.codegen.format.separator + self.cleaned_data['short_access_code']
+            if not self.codegen.code_matches(full_code, 
+                    {'competitor_privileges':['attempt']}):
+                self.errors['short_access_code']=[_('Wrong access code')]
+            if self.codegen.code_matches(full_code,
+                {'competitor_privileges':['resume_attempt']}):
+                if not self.profile:
+                    self.profile = None
+            self.cleaned_data['full_code'] = full_code
+        else:
+            self.errors['competition_questionset']=[_('This field is required')]
+        return super(CompetitionCompetitorForm, self).clean()
+
+class CompetitorUpdateForm(forms.ModelForm):
+    class Meta:
+        model = Competitor
+        fields = ['first_name', 'last_name']
+    cqs_id = forms.IntegerField(min_value=0, widget=forms.HiddenInput)
+    attempt_id = forms.IntegerField(min_value=0, widget=forms.HiddenInput)
 
 class CompetitorCodeForm(forms.Form):
     competitor_privileges = forms.MultipleChoiceField(
@@ -179,37 +287,38 @@ class CompetitionUpdateForm(forms.ModelForm):
         }
 
 class CodeFormatForm(forms.Form):
-    code_id_bits = forms.IntegerField(initial=32)
-    competitor_privilege_bits = forms.IntegerField()
+    code_id_length = forms.IntegerField(initial=8)
+    code_id_format = forms.ChoiceField(
+        choices = code_based_auth.models.CODE_COMPONENT_FORMATS)
+    competitor_privilege_length = forms.IntegerField(min_value=1)
     competitor_privilege_format = forms.ChoiceField(
         choices = code_based_auth.models.CODE_COMPONENT_FORMATS)
     competitor_privilege_hash = forms.ChoiceField(
         initial = code_based_auth.models.DEFAULT_HASH_ALGORITHM,
         choices = code_based_auth.models.HASH_ALGORITHMS)
-    code_effects_bits = forms.IntegerField()
-    code_effects_format = forms.ChoiceField(
-        choices = code_based_auth.models.CODE_COMPONENT_FORMATS)
-    code_effects_hash = forms.ChoiceField(
-        initial = code_based_auth.models.DEFAULT_HASH_ALGORITHM,
-        choices = code_based_auth.models.HASH_ALGORITHMS)
 
 class CompetitorCodeFormatForm(CodeFormatForm):
-    questionset_bits = forms.IntegerField()
     questionset_format = forms.ChoiceField(
-        initial = 'a',
         choices = code_based_auth.models.CODE_COMPONENT_FORMATS)
     questionset_hash = forms.ChoiceField(
         initial = 'noop',
         choices = code_based_auth.models.HASH_ALGORITHMS)
  
 class AdminCodeFormatForm(CodeFormatForm):
-    admin_privilege_bits = forms.IntegerField()
+    admin_privilege_length = forms.IntegerField(min_value=1)
     admin_privilege_format = forms.ChoiceField(
         choices = code_based_auth.models.CODE_COMPONENT_FORMATS)
     admin_privilege_hash = forms.ChoiceField(
         initial = code_based_auth.models.DEFAULT_HASH_ALGORITHM,
         choices = code_based_auth.models.HASH_ALGORITHMS)
- 
+    allowed_effects_length = forms.IntegerField(min_value=1)
+    allowed_effects_format = forms.ChoiceField(
+        choices = code_based_auth.models.CODE_COMPONENT_FORMATS)
+    allowed_effects_hash = forms.ChoiceField(
+        initial = code_based_auth.models.DEFAULT_HASH_ALGORITHM,
+        choices = code_based_auth.models.HASH_ALGORITHMS)
+
+
 class CompetitionQuestionSetCreateForm(forms.ModelForm):
     class Meta:
         model = CompetitionQuestionSet
@@ -225,7 +334,6 @@ class CompetitionQuestionSetUpdateForm(forms.ModelForm):
         retval = super(CompetitionQuestionSetUpdateForm,self).save(*args, **kwargs)
         if self.cleaned_data['create_guest_code'] and \
                 self.instance.guest_code is None:
-            print "Generating code!"
             generator = self.instance.competition.competitor_code_generator
             code_data = {
                 'competitor_privileges':[

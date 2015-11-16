@@ -29,12 +29,12 @@ urlpatterns = patterns('',
     # url(r'^$', 'bober.views.home', name='home'),
     # url(r'^blog/', include('blog.urls')),
     url(r'^$', RedirectView.as_view(url='simple/')),
+    url(r'^/$', RedirectView.as_view(url='simple/')),
     #url(r'^saml2/', include('djangosaml2.urls')),
-    url(r'^admin/', include(admin.site.urls)),
     url(r'^autocomplete/', include('autocomplete_light.urls')),
     # url('', include('django.contrib.auth.urls')),
-    url(r'^school_mentor/', include(bober_paper_submissions.urls)),
     url(r'^simple/', include(bober_si.urls)),
+    url(r'^simple/', include(bober_paper_submissions.urls)),
     url(r'^simple/', include(bober_simple_competition.urls)),
     url(r'^tasks/', include(bober_tasks.urls)),
     url(r'^jsi18n/(?P<packages>\S+?)/$', 'django.views.i18n.javascript_catalog', 
@@ -42,9 +42,10 @@ urlpatterns = patterns('',
     # url(r'^jsi18n/$', 'django.views.i18n.javascript_catalog', js_info_dict),
     url('^accounts/', include('django.contrib.auth.urls')),
     url('', include('social.apps.django_app.urls', namespace='social')),
-    url('', include('password_reset.urls'))
+    url('', include('password_reset.urls')),
+    url(r'^admin/', include(admin.site.urls)),
+    url(r'^i18n/', include('django.conf.urls.i18n'), name="i18n"),
 )
-
 
 if settings.DEBUG:
     urlpatterns += [
