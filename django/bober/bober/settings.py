@@ -30,14 +30,24 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = (
+    # 'dal',
+    # 'dal_select2',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'extra_views',
+    'taggit',
+    'django_tables2',
+    'django_filters',
+    'braces',
+    'code_based_auth',
     'bober_competition',
-    'bober_paper_submissions'
+    'bober_simple_competition',
+    'bober_paper_submissions',
+    'bober_si',
 )
 
 MIDDLEWARE_CLASSES = (
@@ -62,7 +72,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'bober',
         'USER': 'bober',
-        'PASSWORD': 'CHANGE THIS',
+        'PASSWORD': 'bober',
         'HOST': 'localhost',
     }
 }
@@ -85,3 +95,4 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/1.6/howto/static-files/
 
 STATIC_URL = '/static/'
+MEDIA_URL = '/media/'

@@ -2,7 +2,6 @@
 /CertificateOfAchievementGenerator/sourceCode/dist/
 /django/static_files
 /django/static
-settings.py
 *.pyc
 *~
 .idea*
